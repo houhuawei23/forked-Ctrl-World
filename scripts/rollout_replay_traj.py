@@ -29,7 +29,7 @@ import wandb
 import json
 from decord import VideoReader, cpu
 import swanlab
-import mediapy
+import imageio.v3 as iio
 import sys
 from scipy.spatial.transform import Rotation as R
 
@@ -327,7 +327,13 @@ if __name__ == "__main__":
         uuid = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename_video = f"{args.save_dir}/{task_name}/video/time_{uuid}_traj_{val_id_i}_{start_idx_i}_{pred_step}_{text_id}.mp4"
         os.makedirs(os.path.dirname(filename_video), exist_ok=True)
-        mediapy.write_video(filename_video, video, fps=4)
+        iio.imwrite(
+            filename_video,
+            video,
+            fps=4,
+            codec="libx264",
+            ffmpeg_params=["-pix_fmt", "yuv420p"],
+        )
         print(f"Saving video to {filename_video}")
         print("##########################################################################")
 
