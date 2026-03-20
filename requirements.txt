@@ -3,6 +3,8 @@ transformers==4.48.1
 torch==2.7.1
 torchvision
 mediapy
+imageio
+imageio-ffmpeg
 wandb
 swanlab
 accelerate
