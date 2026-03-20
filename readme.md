@@ -70,6 +70,7 @@ GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
 
 **📊  Train VPP in cunstom environments**: If you want to run VPP algorithm on your own robot, download the svd-robot model and follow instructions in the training section. -->
 
+**📊 本地 CPU 测试 / GPU 服务器部署**：无 GPU 时可在本地运行 `CUDA_VISIBLE_DEVICES="" python scripts/cpu_smoke_test.py` 做基础验证；完整说明见 [docs/LOCAL_AND_GPU_TEST_GUIDE.md](docs/LOCAL_AND_GPU_TEST_GUIDE.md)。
 
 
 ## Ctrl-World Inference 📊
