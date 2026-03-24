@@ -1,3 +1,14 @@
+"""
+闭环 Rollout **评估** 变体：与 ``rollout_interact_pi.py`` 相同逻辑，配置来自 ``config_eval.wm_args``。
+
+**用途**
+    针对 ``dataset_example/droid_new_setup_full`` 等本地评测列表，便于与 ``interact_pi`` 主配置区分。
+
+**依赖**
+    同 ``rollout_interact_pi.py``（openpi + 本仓库模型）。
+"""
+
+from __future__ import annotations
 
 from openpi.training import config as config_pi
 from openpi.policies import policy_config

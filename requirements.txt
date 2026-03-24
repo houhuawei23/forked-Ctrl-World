@@ -1,3 +1,6 @@
+# PyTorch GPU: 需与系统驱动支持的 CUDA 一致；勿用默认 PyPI 上带 cu130 等过新 CUDA 的包（会报 driver too old）。
+# 推荐：pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
+# pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
 diffusers==0.34.0
 transformers==4.48.1
 torch==2.7.1

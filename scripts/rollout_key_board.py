@@ -1,3 +1,17 @@
+"""
+键盘交互 Rollout：用 ``models.utils.key_board_control`` 将按键转为笛卡尔轨迹块，再送入世界模型。
+
+**场景**
+    ``task_type=keyboard`` 时由 ``config.wm_args`` 指定单条演示轨迹；不依赖 openpi 策略。
+
+**依赖**
+    ``torch``、``decord``、``CtrlWorld`` 管线与 ``requirements.txt`` 一致。
+
+**输出**
+    ``synthetic_traj/Rollouts_keyboard/video/`` 下 mp4。
+"""
+
+from __future__ import annotations
 
 # from openpi.training import config as config_pi
 # from openpi.policies import policy_config

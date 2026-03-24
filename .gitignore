@@ -1,3 +1,5 @@
+ckpts/
+
 *__pycache__*
 wandb*
 swanlog*

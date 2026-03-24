@@ -1,3 +1,19 @@
+"""
+动作适配器 **Dynamics** 小型 MLP：从当前关节状态 + 未来关节速度序列回归关节增量（训练）或外推未来关节角（推理）。
+
+**用途**
+    在部分 Rollout 路径中将策略输出与笛卡尔空间对齐（见 ``config.wm_args.action_adapter`` 权重路径）；
+    训练脚本在本文件 ``__main__`` 中从 parquet 构造样本。
+
+**依赖**
+    ``torch``、``pandas``、``wandb``（可选日志）；与主世界模型训练独立。
+
+**复杂度**
+    单次 ``forward`` 为小型 MLP，O(action_num × action_dim × hidden)。
+"""
+
+from __future__ import annotations
+
 import numpy as np
 import torch
 import torch.nn.functional as F

@@ -12,6 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+**Ctrl-World fork 说明（中文）**
+
+本文件源自 HuggingFace ``diffusers`` 的 ``StableVideoDiffusionPipeline``，协议见上文 Apache 2.0。
+本仓库 **仅替换** UNet 导入为 ``models.unet_spatio_temporal_condition.UNetSpatioTemporalConditionModel``，
+以便与自定义时空 UNet 权重兼容；其余逻辑尽量保持与上游一致，便于合并新版本。
+
+- 详细 API 仍以类内英文 docstring / ``EXAMPLE_DOC_STRING`` 为准。
+- 若需理解推理与张量布局，请对照 ``models/pipeline_ctrl_world.py`` 中的 ``CtrlWorldDiffusionPipeline``。
+
+**依赖**：``diffusers``、``transformers``、``torch``（版本见根 ``requirements.txt``）。
+"""
+
 import inspect
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Union

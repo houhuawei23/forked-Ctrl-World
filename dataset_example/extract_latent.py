@@ -1,3 +1,19 @@
+"""
+从 DROID 风格 parquet + mp4 导出 **JSON 标注** 与 **SVD VAE latent**（``torch.save``）到目标目录。
+
+**类**
+    :class:`EncodeLatentDataset`：按 ``episodes.jsonl`` 遍历 episode，读 parquet 状态、读三视角视频，
+    用 ``AutoencoderKLTemporalDecoder`` 编码为 latent 并写盘。
+
+**依赖**
+    ``diffusers``（VAE）、``pandas``、``torch``、``mediapy``（可视化）；路径需指向本地 SVD 权重。
+
+**注意**
+    大目录全量跑耗时与磁盘占用高；建议先 ``debug`` 单条轨迹验证。
+"""
+
+from __future__ import annotations
+
 import mediapy
 import os
 from diffusers.models import AutoencoderKL

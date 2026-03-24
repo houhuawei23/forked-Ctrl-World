@@ -1,3 +1,22 @@
+"""
+时空条件 UNet（基于 diffusers ``UNetSpatioTemporalConditionModel`` fork）。
+
+**与上游关系**
+    逻辑与 HuggingFace diffusers 中同名模型基本一致；**本仓库唯一关键行为差异**在
+    :meth:`UNetSpatioTemporalConditionModel.forward` 内对 ``encoder_hidden_states`` 的处理：
+    ``frame_level_cond=True`` 时按帧展开条件，使每一视频帧对应独立动作嵌入（Ctrl-World 帧级姿态条件）。
+
+**下游**
+    由 :class:`models.ctrl_world.CrtlWorld` 替换 SVD 自带 UNet 并加载 ``strict=False`` 权重。
+
+**依赖**
+    ``diffusers``、``torch``（版本见根 ``requirements.txt``）。
+
+**说明**
+    类体大部分为上游实现；未改动的英文 docstring 予以保留。若需合并新版 diffusers，请优先对比
+    ``forward`` 中 ``frame_level_cond`` 分支。
+"""
+
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Union
 
@@ -439,13 +458,15 @@ class UNetSpatioTemporalConditionModel(ModelMixin, ConfigMixin, UNet2DConditionL
         #     num_frames, dim=0, output_size=encoder_hidden_states.shape[0] * num_frames
         # )
 
-        ############################# newly added to support frame_level pose conditioning ########################################
-        # print('new one!!!!!!!!!')
+        # --- Ctrl-World 扩展：帧级动作条件 ---
+        # True：encoder_hidden_states 形状视为 (B, F, C)，按帧与 sample 的 batch*frames 对齐；
+        # False：沿用原 SVD 行为，整段条件复制到每一帧（原 repeat_interleave）。
         if not frame_level_cond:
             encoder_hidden_states = encoder_hidden_states.repeat_interleave(num_frames, dim=0)
         else:
-            encoder_hidden_states = encoder_hidden_states.reshape(batch_size * num_frames, -1, encoder_hidden_states.shape[-1])
-        ############################################################################################################################
+            encoder_hidden_states = encoder_hidden_states.reshape(
+                batch_size * num_frames, -1, encoder_hidden_states.shape[-1]
+            )
 
         # 2. pre-process
         sample = self.conv_in(sample)

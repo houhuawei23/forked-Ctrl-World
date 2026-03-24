@@ -80,7 +80,13 @@ GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
 
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python scripts/rollout_replay_traj.py  --dataset_root_path dataset_example --dataset_meta_info_path dataset_meta_info --dataset_names droid_subset --svd_model_path ${path to svd folder} --clip_model_path ${path to clip folder} --ckpt_path ${path to ctrl-world ckpt}
+CUDA_VISIBLE_DEVICES=0 python scripts/rollout_replay_traj.py \
+    --dataset_root_path dataset_example \
+    --dataset_meta_info_path dataset_meta_info \
+    --dataset_names droid_subset \
+    --svd_model_path ${path to svd folder} \
+    --clip_model_path ${path to clip folder} \
+    --ckpt_path ${path to ctrl-world ckpt}
 ```
 Rollout 相关配置见 `config.py` 中的 `__post_init__`。
 若要重放更多轨迹，需按训练一节的说明下载并处理完整 DROID 数据。

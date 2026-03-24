@@ -1,3 +1,22 @@
+"""
+根据 ``dataset_example`` 下标注 JSON 生成训练/验证 **样本列表** JSON（``train_sample.json`` / ``val_sample.json``）。
+
+**用途**
+    为 ``dataset.dataset_droid_exp33.Dataset_mix`` 提供 ``meta_info/<cfg>/{train,val}_sample.json``；
+    每条样本含 ``episode_id``、``frame_ids``、可选 ``states`` 切片。
+
+**参数**
+    见 ``__main__`` 中 ``ArgumentParser``（``--droid_output_path``、``--dataset_name``）。
+
+**复杂度**
+    扫描与 ``ThreadPoolExecutor`` 处理标注，时间约 O(标注文件数 × 每文件滑窗数)。
+
+**依赖**
+    ``tqdm``、标准库 ``json``；可选 ``safetensors`` 等若后续扩展（当前主逻辑仅用 json）。
+"""
+
+from __future__ import annotations
+
 import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
@@ -23,8 +42,8 @@ def load_and_process_ann_file(data_root, ann_file, sequence_interval=1, start_in
     try:
         with open(f'{data_root}/{ann_file}', "r") as f:
             ann = json.load(f)
-    except:
-        print(f'skip {ann_file}')
+    except Exception:
+        print(f"skip {ann_file}")
         return samples
 
     n_frames = ann['video_length']
