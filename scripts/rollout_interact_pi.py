@@ -1,3 +1,19 @@
+"""
+闭环 Rollout：OpenPI 策略（π）输出动作块 + Ctrl-World 世界模型预测多视角视频。
+
+**与 ``rollout_replay_traj.py`` 的区别**
+    本脚本 **加载** ``openpi`` 策略，动作来自 ``policy.infer``；replay 脚本则使用数据集真值轨迹。
+
+**依赖**
+    需安装 ``openpi``、``openpi_client`` 及 ``requirements.txt`` 中 PyTorch/diffusers 等；无 openpi 环境将无法导入。
+
+**输出**
+    默认写入 ``synthetic_traj/<task_name>/video/`` 下 mp4（真值与预测拼接）。
+
+详见 `docs/ROLLOUT_REPLAY_TRAJ_PAPER.zh.md` 算法 1 对应关系。
+"""
+
+from __future__ import annotations
 
 from openpi.training import config as config_pi
 from openpi.policies import policy_config

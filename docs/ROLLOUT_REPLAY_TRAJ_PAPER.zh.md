@@ -27,10 +27,10 @@
 对应代码注释：
 
 ```290:295:scripts/rollout_replay_traj.py
-            # forward policy
-            print("################ policy forward ####################")
-            # in the trajectory replay model, we use action recorded in trajetcory
-            cartesian_pose = eef_gt[start_id:end_id]  # (pred_step, 7)
+# forward policy
+print("################ policy forward ####################")
+# in the trajectory replay model, we use action recorded in trajetcory
+cartesian_pose = eef_gt[start_id:end_id]  # (pred_step, 7)
 ```
 
 **与论文的对应关系**：这是在**已知真实动作**下检验世界模型 $W$ 的**可控性与多步一致性**——等价于「把算法 1 里的策略换成恒等回放：$a_{t+1:t+H}$ 取自录制轨迹」。论文第 5.2 节世界模型质量分析（PSNR/SSIM 等）也是在给定动作下比较预测与真值；replay 脚本是同一类设定在工程上的落地。

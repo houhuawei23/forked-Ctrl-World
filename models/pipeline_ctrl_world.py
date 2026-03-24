@@ -1,8 +1,30 @@
-from typing import Callable, Dict, List, Optional, Union
+"""
+Ctrl-World 推理管线扩展：在 ``StableVideoDiffusionPipeline`` 上接入动作嵌入、历史 latent 与帧级条件。
+
+**核心类**
+    - :func:`svd_tensor2vid`：将 VAE 解码后的 ``(B,C,F,H,W)`` 转为可写视频帧列表（postprocess）。
+    - :class:`LatentToVideoPipeline`：文本到视频占位实现（本仓库主要走 SVD 分支）。
+    - :class:`CtrlWorldDiffusionPipeline`：重写 ``__call__``，以 ``text`` 参数传入 **动作编码器输出**
+      替代 CLIP 图像嵌入；支持 ``history``、``frame_level_cond``、``cond_wrist`` 等与训练对齐的张量拼接。
+
+**调用约定**
+    Rollout 脚本中通常 ``image`` 已为 **latent 形状** ``(B,4,H,W)``；若为 RGB 则走 VAE 编码分支。
+
+**依赖**
+    ``diffusers``、``einops``、``torch``（见 ``requirements.txt``）。
+
+**维护**
+    与 ``models/pipeline_stable_video_diffusion.py`` 同步升级时需检查 ``prepare_latents``、``_get_add_time_ids`` 签名。
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, List, Optional, Union
+
+import einops
+import PIL
 import torch
 from einops import rearrange, repeat
-import PIL
-import einops
 
 # from diffusers import TextToVideoSDPipeline, StableVideoDiffusionPipeline
 from diffusers import TextToVideoSDPipeline
@@ -15,7 +37,21 @@ from diffusers.loaders import LoraLoaderMixin, TextualInversionLoaderMixin
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.stable_video_diffusion.pipeline_stable_video_diffusion import _resize_with_antialiasing
 
-def svd_tensor2vid(video: torch.Tensor, processor, output_type="np"):
+def svd_tensor2vid(video: torch.Tensor, processor: Any, output_type: str = "np") -> list:
+    """
+    将 ``(B, C, F, H, W)`` 视频张量按 batch 拆成帧列表，经 ``processor.postprocess`` 输出 PIL/np。
+
+    **Args**
+        video: 解码后视频张量。
+        processor: 通常为 ``VideoProcessor``（与 pipeline 一致）。
+        output_type: ``"np"`` / ``"pt"`` 等，透传给 postprocess。
+
+    **Returns**
+        ``list``，长度 ``batch_size``，每项为单条序列的帧表示。
+
+    **参考**
+        ModelScope 多模态管线实现思路（见原注释 URL）。
+    """
     # Based on:
     # https://github.com/modelscope/modelscope/blob/1509fdb973e5871f37148a4b5e5964cafd43e64d/modelscope/pipelines/multi_modal/text_to_video_synthesis_pipeline.py#L78
 
@@ -29,7 +65,14 @@ def svd_tensor2vid(video: torch.Tensor, processor, output_type="np"):
 
     return outputs
 
+
 class LatentToVideoPipeline(TextToVideoSDPipeline):
+    """
+    文本驱动视频生成占位管线（本仓库主路径使用 :class:`CtrlWorldDiffusionPipeline`）。
+
+    保留用于兼容或实验；默认 docstring 为上游英文说明。
+    """
+
     @torch.no_grad()
     def __call__(
         self,
@@ -233,14 +276,28 @@ class LatentToVideoPipeline(TextToVideoSDPipeline):
 
         return TextToVideoSDPipelineOutput(frames=video)
 
-def _append_dims(x, target_dims):
-    """Appends dimensions to the end of a tensor until it has target_dims dimensions."""
+
+def _append_dims(x: torch.Tensor, target_dims: int) -> torch.Tensor:
+    """
+    在张量尾部补 ``1`` 维直至 ``ndim == target_dims``（用于与 ``latents`` broadcast ``guidance_scale``）。
+
+    **Raises**
+        ValueError: 若 ``x.ndim > target_dims``。
+    """
     dims_to_append = target_dims - x.ndim
     if dims_to_append < 0:
         raise ValueError(f"input has {x.ndim} dims but target_dims is {target_dims}, which is less")
     return x[(...,) + (None,) * dims_to_append]
 
+
 class CtrlWorldDiffusionPipeline(StableVideoDiffusionPipeline):
+    """
+    继承 HuggingFace ``StableVideoDiffusionPipeline``，将 **条件嵌入** 改为由 ``Action_encoder2`` 产生的
+    ``text`` 张量（历史+未来帧姿态），并扩展 ``history`` / ``frame_level_cond`` 等 Ctrl-World 专用参数。
+
+    详细参数与英文 docstring 见 :meth:`__call__`；脚本入口见 ``scripts/rollout_*.py``。
+    """
+
     @torch.no_grad()
     def __call__(
         self,

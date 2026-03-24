@@ -1,5 +1,25 @@
-# from diffusers import StableVideoDiffusionPipeline
-import sys, os
+"""
+世界模型（Ctrl-World / CrtlWorld）训练入口。
+
+**流程**
+    使用 :class:`~accelerate.Accelerator` 包装 ``CrtlWorld``，从 ``Dataset_mix`` 读取预编码 latent
+    与动作，优化 ``forward`` 返回的扩散重建损失；可选从 ``ckpt_path`` 恢复权重。
+
+**依赖**
+    ``accelerate``、``wandb``/``swanlab``（日志）、``torch`` 等（``requirements.txt``）。
+
+**用法**
+    在仓库根目录：``python scripts/train_wm.py``（参数由 ``config.wm_args`` 与命令行扩展定义，见文件末尾 `if __name__`）。
+
+**复杂度**
+    训练步主循环为 O(步数 × batch × UNet 前向)；与数据集规模与 ``max_train_steps`` 线性相关。
+"""
+
+from __future__ import annotations
+
+import sys
+import os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.pipeline_stable_video_diffusion import StableVideoDiffusionPipeline
 from models.pipeline_ctrl_world import CtrlWorldDiffusionPipeline
@@ -12,7 +32,6 @@ import torch.nn as nn
 import einops
 from accelerate import Accelerator
 import datetime
-import os
 from accelerate.logging import get_logger
 from tqdm.auto import tqdm
 import json
@@ -20,12 +39,12 @@ from decord import VideoReader, cpu
 import wandb
 import swanlab
 import mediapy
-from models.ctrl_world import CrtlWorld
 from config import wm_args
 import math
+from typing import Any
 
 
-def main(args):
+def main(args: Any) -> None:
     logger = get_logger(__name__, log_level="INFO")
     swanlab.sync_wandb()
     accelerator = Accelerator(
