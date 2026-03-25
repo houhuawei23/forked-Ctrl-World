@@ -26,7 +26,8 @@
 
 对应代码注释：
 
-```290:295:scripts/rollout_replay_traj.py
+```python
+# 290:295:scripts/rollout_replay_traj.py
 # forward policy
 print("################ policy forward ####################")
 # in the trajectory replay model, we use action recorded in trajetcory

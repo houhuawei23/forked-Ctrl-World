@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 # from openpi.training import config as config_pi
 # from openpi.policies import policy_config
 # from openpi_client import image_tools
@@ -48,10 +50,15 @@ import sys
 from scipy.spatial.transform import Rotation as R
 
 
+class agent:
+    """
+    键盘控制 Rollout：不加载策略，动作为 ``key_board_control`` 生成的笛卡尔路点块。
 
-class agent():
-    def __init__(self,args):
-          
+    **参数**
+        ``args`` 为 :class:`config.wm_args` 实例（``task_type`` 常为 ``keyboard``）。
+    """
+
+    def __init__(self, args: Any) -> None:
         # args = Args()
         args.val_model_path = args.ckpt_path
         self.args = args

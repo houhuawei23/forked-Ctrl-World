@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from openpi.training import config as config_pi
 from openpi.policies import policy_config
 from openpi_client import image_tools
@@ -45,11 +47,17 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.pipeline_ctrl_world import CtrlWorldDiffusionPipeline
 from models.ctrl_world import CrtlWorld
 from models.utils import key_board_control, get_fk_solution
-    
 
-class agent():
-    def __init__(self,args):
-          
+
+class agent:
+    """
+    与 ``rollout_interact_pi.agent`` 相同，但配置来自 ``config_eval.wm_args``（评测轨迹列表）。
+
+    **参数**
+        ``args`` 为 ``config_eval.wm_args`` 实例。
+    """
+
+    def __init__(self, args: Any) -> None:
         # args = Args()
         args.val_model_path = args.ckpt_path
         self.args = args

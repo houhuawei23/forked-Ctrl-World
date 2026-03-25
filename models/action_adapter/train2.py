@@ -14,28 +14,35 @@
 
 from __future__ import annotations
 
-import numpy as np
-import torch
-import torch.nn.functional as F
-import torch.nn as nn
-import einops
-from accelerate import Accelerator
-import datetime
-import os
-from accelerate.logging import get_logger
-from tqdm.auto import tqdm
-import wandb
 import json
-from decord import VideoReader, cpu
-from torch.utils.data import Dataset,DataLoader
-import pandas as pd
+import os
 import random
+from typing import Any, Dict, Optional, Union
 
-def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
+import einops
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from accelerate import Accelerator
+from torch.utils.data import DataLoader, Dataset
+from tqdm.auto import tqdm
+
+
+def get_1d_sincos_pos_embed_from_grid(embed_dim: int, pos: np.ndarray) -> np.ndarray:
     """
-    embed_dim: output dimension for each position
-    pos: a list of positions to be encoded: size (M,)
-    out: (M, D)
+    1D 正弦位置编码（与 ViT/MAE 常用形式一致）。
+
+    **Args**
+        embed_dim: 输出维度，须为偶数。
+        pos: 任意形状，内部展平为 ``(M,)``。
+
+    **Returns**
+        ``(M, embed_dim)`` 的 ``float64`` 数组。
+
+    **复杂度**
+        O(M * embed_dim)。
     """
     assert embed_dim % 2 == 0
     omega = np.arange(embed_dim // 2, dtype=np.float64)
@@ -52,7 +59,18 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     return emb
 
 class Dynamics(nn.Module):
-    def __init__(self, action_dim, action_num, hidden_size):
+    """
+    用 MLP 从「当前关节 + 未来若干步关节速度」预测关节增量；训练时与 ``joints_delta`` 做 MSE。
+
+    **属性**
+        ``joint_vel_01/99``、``joint_delta_01/99``：离线统计的分位数，用于归一化。
+
+    **注意**
+        :meth:`inference` 依赖 ``state_encode`` / ``clip_pos_emb`` 等，**未**在本类 ``__init__`` 中
+        注册，属于遗留/未完成分支，调用将报错；训练路径仅使用 :meth:`forward`。
+    """
+
+    def __init__(self, action_dim: int, action_num: int, hidden_size: int) -> None:
         super().__init__()
         self.action_dim = action_dim
         self.action_num = action_num
@@ -76,7 +94,13 @@ class Dynamics(nn.Module):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-    def forward(self, joint, joint_vel, joint_delta, training=True):
+    def forward(
+        self,
+        joint: np.ndarray,
+        joint_vel: np.ndarray,
+        joint_delta: Optional[np.ndarray] = None,
+        training: bool = True,
+    ) -> Union[torch.Tensor, np.ndarray]:
         # action: (B, T, action_num, action_dim)
         # action = einops.rearrange(action, 'b t d -> b 1 (t d)')
         if joint.ndim == 2:
@@ -130,15 +154,22 @@ class Dynamics(nn.Module):
         data_max: np.ndarray,
         clip_min: float = -1,
         clip_max: float = 1,
-        eps=1e-8,
+        eps: float = 1e-8,
     ) -> np.ndarray:
         clip_range = clip_max - clip_min
         rdata = (data - clip_min) / clip_range * (data_max - data_min) + data_min
         return rdata
-    def inference(self, state, action):
+    def inference(self, state: np.ndarray, action: np.ndarray) -> np.ndarray:
         """
-        state: (B, 1, 7)
-        action: (B, action_num, action_dim)
+        **遗留接口**：假设存在 ``state_encode`` / ``action_encode`` / ``transformer`` / ``clip_pos_emb``，
+        当前 :class:`Dynamics` 未定义这些子模块，**勿调用**。
+
+        **Args**
+            state: ``(1, 7)`` 当前关节。
+            action: ``(action_num, action_dim)`` 动作序列。
+
+        **Returns**
+            设计为 ``(action_num, 7)`` 预测状态，实际会因未定义模块而失败。
         """
         state = state[None,:]  # (1, 1, 7)
         assert state.shape == (1,7), "State shape should be (1, 7), got {}".format(state.shape)
@@ -167,12 +198,14 @@ class Dynamics(nn.Module):
 
 
 class Dataset_xhand(Dataset):
-    def __init__(
-            self,
-            args,
-            mode = 'val',
-    ):
-        """Constructor."""
+    """
+    从 ``{data_json_path}/{mode}_sample.json`` 与远程 parquet 读取关节序列，供 :class:`Dynamics` 训练。
+
+    **Returns（``__getitem__``）**
+        ``dict``：``joints`` ``(1,7)``、``joint_vels``、``joints_delta`` 等。
+    """
+
+    def __init__(self, args: Any, mode: str = "val") -> None:
         super().__init__()
         self.args = args
         self.mode = mode
@@ -203,7 +236,7 @@ class Dataset_xhand(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    def fetch(self,index):
+    def fetch(self, index: int) -> Dict[str, np.ndarray]:
         sample = self.samples[index]
         sampled_video_dir = self.video_path[index]
         ann_file = sample['ann_file']
@@ -256,19 +289,20 @@ class Dataset_xhand(Dataset):
         # print(joints.shape, joint_vels.shape, file_path, frame_ids_ori)
         return data
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> Dict[str, np.ndarray]:
         try:
             data = self.fetch(index)
-        except:
+        except Exception:
             print(f"Error fetching data for index {index}, retrying...")
-            # print(data['file_path'])
-            data = self.fetch(random.randint(0, len(self.samples)-1))
+            data = self.fetch(random.randint(0, len(self.samples) - 1))
 
         return data
 
 
 class Args:
-    def __init__(self):
+    """训练脚本内使用的最小配置占位（路径与分位数需按部署环境修改）。"""
+
+    def __init__(self) -> None:
         self.data_json_path = 'exp_cfg/droid_svd_v3'
         self.data_root_path = '/cephfs/shared/droid_hf'
         self.action_01 = [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]

@@ -12,6 +12,8 @@ wandb
 swanlab
 accelerate
 tqdm
+typer
+loguru
 numpy
 decord
 einops
@@ -20,3 +22,5 @@ pandas
 omegaconf
 imageio
 safetensors
+# requests 2.32.x 校验：若装 chardet>=6 会触发 RequestsDependencyWarning（与 urllib3/charset 无关）
+chardet>=3.0.2,<6

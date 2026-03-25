@@ -27,7 +27,6 @@ import einops
 import imageio.v3 as iio
 import numpy as np
 import torch
-from accelerate import Accelerator
 from decord import VideoReader, cpu
 
 # from openpi.training import config as config_pi
@@ -41,6 +40,35 @@ from models.pipeline_ctrl_world import CtrlWorldDiffusionPipeline
 
 if TYPE_CHECKING:
     from config import wm_args
+
+
+def _resolve_rollout_device() -> torch.device:
+    """
+    本脚本为单进程推理，不使用 accelerate.Accelerator，避免其与 CUDA_VISIBLE_DEVICES
+    组合时在部分环境下的异常；可见 GPU 恒映射为 cuda:0。
+
+    若 shell 中已设置 CUDA_VISIBLE_DEVICES=3，此处应看到 device_count=1。
+    """
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if not torch.cuda.is_available():
+        print(
+            f"[rollout] CUDA_VISIBLE_DEVICES={cvd!r}, torch.cuda.is_available()=False -> CPU"
+        )
+        return torch.device("cpu")
+    n = torch.cuda.device_count()
+    name = torch.cuda.get_device_name(0)
+    print(
+        f"[rollout] CUDA_VISIBLE_DEVICES={cvd!r}, device_count={n}, "
+        f"cuda:0 -> {name}"
+    )
+    if cvd.strip() != "" and n != 1:
+        print(
+            "[rollout] 提示：已设置 CUDA_VISIBLE_DEVICES 时通常应 device_count==1；"
+            "若不为 1，请确认未在 import torch 之前被其它库抢先初始化 CUDA，"
+            "或改用终端 export CUDA_VISIBLE_DEVICES=… 再运行（VS Code 需在 launch.json 的 env 里设置）。"
+        )
+    torch.cuda.set_device(0)
+    return torch.device("cuda", 0)
 
 
 def _no_cudnn() -> AbstractContextManager[Any]:
@@ -60,8 +88,7 @@ class agent:
     与 rollout_interact_pi.py 的区别：本类对应「replay」任务，主循环中动作为数据集真值而非策略输出。
     """
 
-    args: Any  # wm_args，运行时由 config.wm_args 注入
-    accelerator: Accelerator
+    args: wm_args  # wm_args，运行时由 config.wm_args 注入
     device: torch.device
     dtype: torch.dtype
     model: CrtlWorld
@@ -72,8 +99,7 @@ class agent:
         # args = Args()
         args.val_model_path = args.ckpt_path
         self.args = args
-        self.accelerator = Accelerator()
-        self.device = self.accelerator.device
+        self.device = _resolve_rollout_device()
         self.dtype = args.dtype
 
         # # load pi policy
@@ -92,8 +118,10 @@ class agent:
 
         # load ctrl-world model
         self.model = CrtlWorld(args)
-        self.model.load_state_dict(torch.load(args.val_model_path, map_location="cpu"))
-        self.model.to(self.accelerator.device).to(self.dtype)
+        self.model.load_state_dict(
+            torch.load(args.val_model_path, map_location="cpu")
+        )
+        self.model.to(self.device).to(self.dtype)
         self.model.eval()
         print("load world model success")
         with open(f"{args.data_stat_path}", "r") as f:
@@ -180,7 +208,9 @@ class agent:
 
             # encode video (VAE in float32: avoids cuDNN CUDNN_STATUS_NOT_INITIALIZED with bf16/fp16 convs on some setups)
             device = self.device
-            true_video_t = torch.from_numpy(true_video).to(self.dtype).to(device)
+            true_video_t = (
+                torch.from_numpy(true_video).to(self.dtype).to(device)
+            )
             x = true_video_t.permute(0, 3, 1, 2).to(device) / 255.0 * 2 - 1
             vae = self.model.pipeline.vae
             vae_dtype = next(vae.parameters()).dtype
@@ -193,7 +223,11 @@ class agent:
                     for i in range(0, len(x), batch_size):
                         batch = x[i : i + batch_size]
                         with _no_cudnn():
-                            latent = vae.encode(batch).latent_dist.sample().mul_(vae.config.scaling_factor)
+                            latent = (
+                                vae.encode(batch)
+                                .latent_dist.sample()
+                                .mul_(vae.config.scaling_factor)
+                            )
                         latents.append(latent.to(self.dtype))
                     x = torch.cat(latents, dim=0)
                 finally:
@@ -226,17 +260,30 @@ class agent:
         image_cond = video_latent_cond
 
         # action should be normed
-        action_cond = self.normalize_bound(action_cond, self.state_p01, self.state_p99, clip_min=-1, clip_max=1)
-        action_cond = torch.tensor(action_cond).unsqueeze(0).to(self.device).to(self.dtype)
+        action_cond = self.normalize_bound(
+            action_cond, self.state_p01, self.state_p99, clip_min=-1, clip_max=1
+        )
+        action_cond = (
+            torch.tensor(action_cond)
+            .unsqueeze(0)
+            .to(self.device)
+            .to(self.dtype)
+        )
         assert image_cond.shape[1:] == (4, 72, 40)
-        assert action_cond.shape[1:] == (args.num_frames + args.num_history, args.action_dim)
+        assert action_cond.shape[1:] == (
+            args.num_frames + args.num_history,
+            args.action_dim,
+        )
 
         # predict future frames
         with torch.no_grad():
             bsz = action_cond.shape[0]
             if text is not None:
                 text_token = self.model.action_encoder(
-                    action_cond, text, self.model.tokenizer, self.model.text_encoder
+                    action_cond,
+                    text,
+                    self.model.tokenizer,
+                    self.model.text_encoder,
                 )
             else:
                 text_token = self.model.action_encoder(action_cond)
@@ -261,7 +308,9 @@ class agent:
                 frame_level_cond=True,
             )
         # 高度维上 3 个相机拼成 3*h，此处拆回 (B*3, F, C, H, W) 以便逐视角 VAE 解码
-        latents = einops.rearrange(latents, "b f c (m h) (n w) -> (b m n) f c h w", m=3, n=1)  # (B, 8, 4, 32,32)
+        latents = einops.rearrange(
+            latents, "b f c (m h) (n w) -> (b m n) f c h w", m=3, n=1
+        )  # (B, 8, 4, 32,32)
 
         vae = pipeline.vae
         vae_dtype = next(vae.parameters()).dtype
@@ -274,15 +323,29 @@ class agent:
             true_video = true_video.flatten(0, 1)
             decode_kwargs: dict[str, Any] = {}
             for i in range(0, true_video.shape[0], args.decode_chunk_size):
-                chunk = true_video[i : i + args.decode_chunk_size] / pipeline.vae.config.scaling_factor
+                chunk = (
+                    true_video[i : i + args.decode_chunk_size]
+                    / pipeline.vae.config.scaling_factor
+                )
                 chunk = chunk.to(torch.float32)
                 decode_kwargs["num_frames"] = chunk.shape[0]
                 with _no_cudnn():
-                    decoded_video.append(vae.decode(chunk, **decode_kwargs).sample)
+                    decoded_video.append(
+                        vae.decode(chunk, **decode_kwargs).sample
+                    )
             true_video = torch.cat(decoded_video, dim=0)
-            true_video = true_video.reshape(bsz, frame_num, *true_video.shape[1:])
-            true_video = ((true_video / 2.0 + 0.5).clamp(0, 1) * 255)
-            true_video = true_video.detach().to(torch.float32).cpu().numpy().transpose(0, 1, 3, 4, 2).astype(np.uint8)  # (2,16,256,256,3)
+            true_video = true_video.reshape(
+                bsz, frame_num, *true_video.shape[1:]
+            )
+            true_video = (true_video / 2.0 + 0.5).clamp(0, 1) * 255
+            true_video = (
+                true_video.detach()
+                .to(torch.float32)
+                .cpu()
+                .numpy()
+                .transpose(0, 1, 3, 4, 2)
+                .astype(np.uint8)
+            )  # (2,16,256,256,3)
 
             # decode predicted video
             decoded_video = []
@@ -290,23 +353,44 @@ class agent:
             x = latents.flatten(0, 1)
             decode_kwargs = {}
             for i in range(0, x.shape[0], args.decode_chunk_size):
-                chunk = x[i : i + args.decode_chunk_size] / pipeline.vae.config.scaling_factor
+                chunk = (
+                    x[i : i + args.decode_chunk_size]
+                    / pipeline.vae.config.scaling_factor
+                )
                 chunk = chunk.to(torch.float32)
                 decode_kwargs["num_frames"] = chunk.shape[0]
                 with _no_cudnn():
-                    decoded_video.append(vae.decode(chunk, **decode_kwargs).sample)
+                    decoded_video.append(
+                        vae.decode(chunk, **decode_kwargs).sample
+                    )
             videos = torch.cat(decoded_video, dim=0)
             videos = videos.reshape(bsz, frame_num, *videos.shape[1:])
-            videos = ((videos / 2.0 + 0.5).clamp(0, 1) * 255)
-            videos = videos.detach().to(torch.float32).cpu().numpy().transpose(0, 1, 3, 4, 2).astype(np.uint8)
+            videos = (videos / 2.0 + 0.5).clamp(0, 1) * 255
+            videos = (
+                videos.detach()
+                .to(torch.float32)
+                .cpu()
+                .numpy()
+                .transpose(0, 1, 3, 4, 2)
+                .astype(np.uint8)
+            )
         finally:
             vae.to(vae_dtype)
 
         # concatenate true videos and video（相机维在通道已拆开，此处沿高度维拼真值/预测，再沿宽度拼多相机）
-        videos_cat = np.concatenate([true_video, videos], axis=-3)  # (3, 8, 256, 256, 3)
-        videos_cat = np.concatenate([video for video in videos_cat], axis=-2).astype(np.uint8)
+        videos_cat = np.concatenate(
+            [true_video, videos], axis=-3
+        )  # (3, 8, 256, 256, 3)
+        videos_cat = np.concatenate(
+            [video for video in videos_cat], axis=-2
+        ).astype(np.uint8)
 
-        return videos_cat, true_video, videos, latents  # np.uint8:(3, 8, 128, 256, 3) or (3, 8, 192, 320, 3)
+        return (
+            videos_cat,
+            true_video,
+            videos,
+            latents,
+        )  # np.uint8:(3, 8, 128, 256, 3) or (3, 8, 192, 320, 3)
 
 
 if __name__ == "__main__":
@@ -331,7 +415,9 @@ if __name__ == "__main__":
                 base.__dict__[k] = v
         return base
 
-    args = merge_args(args, args_new)
+    args: wm_args = merge_args(args, args_new)
+    print("args")
+    print(args)
 
     # create rollout agent
     Agent = agent(args)
@@ -341,13 +427,27 @@ if __name__ == "__main__":
     num_frames = args.num_frames
     print(f"rollout with {args.task_type}")
 
-    for val_id_i, text_i, start_idx_i in zip(args.val_id, args.instruction, args.start_idx):
+    # 遍历每条轨迹，进行轨迹重放
+    for val_id_i, text_i, start_idx_i in zip(
+        args.val_id, args.instruction, args.start_idx
+    ):
         # read ground truth trajectory informations
-        eef_gt, joint_pos_gt, video_dict, video_latents, instruction = Agent.get_traj_info(
-            val_id_i, start_idx=start_idx_i, steps=int(pred_step * interact_num + 8)
+        eef_gt, joint_pos_gt, video_dict, video_latents, instruction = (
+            Agent.get_traj_info(
+                val_id_i,
+                start_idx=start_idx_i,
+                steps=int(pred_step * interact_num + 8),
+            )
         )
         text_i = instruction
-        print("text_i:", instruction, "eef pose at t=0", eef_gt[0], "joint at t=0", joint_pos_gt[0])
+        print(
+            "text_i:",
+            instruction,
+            "eef pose at t=0",
+            eef_gt[0],
+            "joint at t=0",
+            joint_pos_gt[0],
+        )
 
         # create buffers and push first frames to history buffer
         predicted_latents: Optional[torch.Tensor] = None
@@ -357,8 +457,12 @@ if __name__ == "__main__":
         his_joint: List[np.ndarray] = []
         his_eef: List[np.ndarray] = []
         # 三视角 latent 在通道维拼接为 (1, 4, 72, 40)，对应论文多视角联合条件
-        first_latent = torch.cat([v[0] for v in video_latents], dim=1).unsqueeze(0)  # (1, 4, 72, 40)
-        assert first_latent.shape == (1, 4, 72, 40), f"Expected first_latent shape (1, 4, 72, 40), got {first_latent.shape}"
+        first_latent = torch.cat(
+            [v[0] for v in video_latents], dim=1
+        ).unsqueeze(0)  # (1, 4, 72, 40)
+        assert first_latent.shape == (1, 4, 72, 40), (
+            f"Expected first_latent shape (1, 4, 72, 40), got {first_latent.shape}"
+        )
         # 用起始时刻重复填充历史槽，使 history_idx 第一步可一致索引（见 ROLLOUT_REPLAY_TRAJ_PAPER.zh.md 第 5 节）
         for _ in range(Agent.args.num_history * 4):
             his_cond.append(first_latent)  # (1, 4, 72, 40)
@@ -366,6 +470,7 @@ if __name__ == "__main__":
             his_eef.append(eef_gt[0:1])  # (1, 7)
 
         # interact loop：开环动作（真值轨迹）+ 闭环图像（预测接回 his_cond）
+        video_dict_pred: Optional[List[np.ndarray]] = None
         for i in range(interact_num):
             # ground truth video latent 窗口；相邻步重叠 1 帧索引，保证自回归边界连续
             start_id = int(i * (pred_step - 1))
@@ -378,59 +483,87 @@ if __name__ == "__main__":
             if i == 0:
                 video_first = [v[0] for v in video_dict]
             else:
+                assert video_dict_pred is not None
                 video_first = [v[-1] for v in video_dict_pred]
-            assert joint_first.shape == (8,), f"Expected joint_first shape (8,), got {joint_first.shape}"
-            assert state_first.shape == (7,), f"Expected state_first shape (7,), got {state_first.shape}"
+            assert joint_first.shape == (8,), (
+                f"Expected joint_first shape (8,), got {joint_first.shape}"
+            )
+            assert state_first.shape == (7,), (
+                f"Expected state_first shape (7,), got {state_first.shape}"
+            )
 
             # forward policy
             print("################ policy forward ####################")
             # in the trajectory replay model, we use action recorded in trajetcory
             cartesian_pose = eef_gt[start_id:end_id]  # (pred_step, 7)
-
-            print("cartesian space action", cartesian_pose[0])  # output xyz and gripper for debug
-            print("cartesian space action", cartesian_pose[-1])  # output xyz and gripper for debug
+            # output xyz and gripper for debug
+            print("cartesian space action", cartesian_pose[0])
+            print("cartesian space action", cartesian_pose[-1])
 
             print("################ world model forward ################")
             print(f"traj_id:{val_id_i}, interact step: {i}/{interact_num}")
             # retrive history cond and action cond（与 config.num_history 对齐的稀疏索引）
             history_idx = [0, 0, -8, -6, -4, -2]
-            his_pose = np.concatenate([his_eef[idx] for idx in history_idx], axis=0)  # (num_history, 7) == (6, 7)
+            # (num_history, 7) == (6, 7)
+            his_pose = np.concatenate(
+                [his_eef[idx] for idx in history_idx], axis=0
+            )
             action_cond = np.concatenate([his_pose, cartesian_pose], axis=0)
-            his_cond_input = torch.cat([his_cond[idx] for idx in history_idx], dim=0).unsqueeze(0)
+            his_cond_input = torch.cat(
+                [his_cond[idx] for idx in history_idx], dim=0
+            ).unsqueeze(0)
             current_latent = his_cond[-1]  # (1, 4, 72, 40)
-            assert current_latent.shape == (1, 4, 72, 40), f"Expected current_latent shape (1, 4, 72, 40), got {current_latent.shape}"
-            assert action_cond.shape == (int(num_history + num_frames), 7), f"Expected action_cond shape ({int(num_history + num_frames)}, 7), got {action_cond.shape}"
+            assert current_latent.shape == (1, 4, 72, 40), (
+                f"Expected current_latent shape (1, 4, 72, 40), got {current_latent.shape}"
+            )
+            assert action_cond.shape == (int(num_history + num_frames), 7), (
+                f"Expected action_cond shape ({int(num_history + num_frames)}, 7), got {action_cond.shape}"
+            )
             assert his_cond_input.shape == (
                 1,
                 int(num_history),
                 4,
                 72,
                 40,
-            ), f"Expected his_cond_input shape (1, {int(num_history)}, 4, 72, 40), got {his_cond_input.shape}"
+            ), (
+                f"Expected his_cond_input shape (1, {int(num_history)}, 4, 72, 40), got {his_cond_input.shape}"
+            )
             # forward world model（video_dict_pred 实为预测 RGB，命名沿历史遗留）
-            videos_cat, true_videos, video_dict_pred, predicted_latents = Agent.forward_wm(
-                action_cond,
-                video_latent_true,
-                current_latent,
-                his_cond=his_cond_input,
-                text=text_i if Agent.args.text_cond else None,
+            videos_cat, true_videos, video_dict_pred, predicted_latents = (
+                Agent.forward_wm(
+                    action_cond,
+                    video_latent_true,
+                    current_latent,
+                    his_cond=his_cond_input,
+                    text=text_i if Agent.args.text_cond else None,
+                )
             )
 
             print("################ record information ################")
             # push current step to history buffer
             his_eef.append(cartesian_pose[pred_step - 1 : pred_step])  # (1,7)
             his_cond.append(
-                torch.cat([v[pred_step - 1] for v in predicted_latents], dim=1).unsqueeze(0)
+                torch.cat(
+                    [v[pred_step - 1] for v in predicted_latents], dim=1
+                ).unsqueeze(0)
             )  # (1, 4, 72, 40)
             if i == interact_num - 1:
-                video_to_save.append(videos_cat)  # save all frames for the last interaction step
+                # save all frames for the last interaction step
+                video_to_save.append(videos_cat)
             else:
-                video_to_save.append(videos_cat[: pred_step - 1])  # last frame is the first frame of next step, so we remove it here
+                # last frame is the first frame of next step, so we remove it here
+                video_to_save.append(videos_cat[: pred_step - 1])
 
         # save rollout video and info with parameters
         video = np.concatenate(video_to_save, axis=0)
         task_name = args.task_name
-        text_id = text_i.replace(" ", "_").replace(",", "").replace(".", "").replace("'", "").replace('"', "")[:30]
+        text_id = (
+            text_i.replace(" ", "_")
+            .replace(",", "")
+            .replace(".", "")
+            .replace("'", "")
+            .replace('"', "")[:30]
+        )
         videos_dir = args.val_model_path.split("/")[:-1]
         videos_dir = "/".join(videos_dir)
         uuid = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -444,7 +577,9 @@ if __name__ == "__main__":
             ffmpeg_params=["-pix_fmt", "yuv420p"],
         )
         print(f"Saving video to {filename_video}")
-        print("##########################################################################")
+        print(
+            "##########################################################################"
+        )
 
 
 # CUDA_VISIBLE_DEVICES=0 python rollout_replay_traj.py

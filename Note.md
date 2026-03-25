@@ -24,4 +24,22 @@ CUDA_VISIBLE_DEVICES=0 python scripts/rollout_replay_traj.py \
   --ckpt_path ./ckpts/ctrl-world/checkpoint-10000.pt \
   --task_type replay
 
+CUDA_VISIBLE_DEVICES=0 python scripts/rollout_replay_traj.py \
+  --dataset_root_path dataset_example \
+  --dataset_meta_info_path dataset_meta_info \
+  --dataset_names droid_subset \
+  --svd_model_path ~/workspace/forked-Ctrl-World/ckpts/svd \
+  --clip_model_path ~/workspace/forked-Ctrl-World/ckpts/clip/ \
+  --ckpt_path ~/workspace/forked-Ctrl-World/ckpts/ctrl-world/checkpoint-10000.pt \
+  --task_type replay
+
+
+CUDA_VISIBLE_DEVICES=0 python scripts/rollout_replay_traj.py \
+  --dataset-root-path dataset_example \
+  --dataset-meta-info-path dataset_meta_info \
+  --dataset-names droid_subset \
+  --svd-model-path ~/workspace/forked-Ctrl-World/ckpts/svd \
+  --clip-model-path ~/workspace/forked-Ctrl-World/ckpts/clip/ \
+  --ckpt-path ~/workspace/forked-Ctrl-World/ckpts/ctrl-world/checkpoint-10000.pt \
+  --task-type replay
 ```

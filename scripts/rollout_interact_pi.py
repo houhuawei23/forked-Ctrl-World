@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from openpi.training import config as config_pi
 from openpi.policies import policy_config
 from openpi_client import image_tools
@@ -50,11 +52,18 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.pipeline_ctrl_world import CtrlWorldDiffusionPipeline
 from models.ctrl_world import CrtlWorld
 from models.utils import key_board_control, get_fk_solution
-    
 
-class agent():
-    def __init__(self,args):
-          
+
+class agent:
+    """
+    闭环评测代理：加载 OpenPI 策略与 ``CrtlWorld``，在交互循环中用 ``policy.infer`` 产生动作块，
+    再经可选 ``Dynamics`` 适配器将关节速度转为笛卡尔条件，送入世界模型。
+
+    **参数**
+        ``args`` 为 :class:`config.wm_args` 实例（含 ``pi_ckpt``、``action_adapter`` 等）。
+    """
+
+    def __init__(self, args: Any) -> None:
         # args = Args()
         args.val_model_path = args.ckpt_path
         self.args = args
